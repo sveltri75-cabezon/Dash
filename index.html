@@ -615,20 +615,59 @@ async function loadPF() {
   try {
     const data = await fetchData(SOURCES.Plazo_Fijo);
     const arr = Array.isArray(data) ? data : [];
-    const last = arr[arr.length - 1] || {};
-    const tna = last.tna ?? last.TNA ?? null;
-    const tea = last.tea ?? last.TEA ?? null;
-    const entidad = last.entidad ?? last.banco ?? last.nombre ?? '';
-    const fecha = last.fecha ?? last.date ?? '';
+    if (!arr.length) throw new Error('Sin datos');
+
+    // Get latest date in dataset
+    const fechas = arr.map(x => x.fecha ?? x.date ?? '').filter(Boolean).sort();
+    const lastFecha = fechas[fechas.length - 1];
+    const latest = lastFecha ? arr.filter(x => (x.fecha ?? x.date ?? '') === lastFecha) : arr;
+
+    // Detect entity key
+    const sample = latest[0] || arr[0];
+    console.log('PF keys:', Object.keys(sample), 'sample:', sample);
+    const entKey = ['entidad','banco','nombre','entity','name','institucion'].find(k => k in sample);
+
+    // Prefer explicit no-client key, fallback to generic tna
+    const tnaNoClienteKey = ['tnaNoClientes','tna_no_clientes','tnaNoCliente','tasaNoClientes','noClientes']
+      .find(k => k in sample && sample[k] != null && !isNaN(parseFloat(sample[k])) && parseFloat(sample[k]) > 0);
+    const tnaKey = tnaNoClienteKey ?? ['tna','TNA','tasa','rate'].find(k => k in sample);
+
+    const top5 = [...latest]
+      .filter(x => tnaKey && x[tnaKey] != null && !isNaN(parseFloat(x[tnaKey])) && parseFloat(x[tnaKey]) > 0)
+      .sort((a, b) => parseFloat(b[tnaKey]) - parseFloat(a[tnaKey]))
+      .slice(0, 5);
+
+    if (!top5.length) throw new Error('No se encontraron tasas');
+
+    const maxTna = parseFloat(top5[0][tnaKey]);
+
+    const rows = top5.map((item, i) => {
+      const tna = parseFloat(item[tnaKey]);
+      const nombre = entKey ? item[entKey] : 'Entidad ' + (i+1);
+      const bar = Math.round((tna / maxTna) * 100);
+      const color = i === 0 ? 'var(--accent)' : 'var(--accent2)';
+      return `
+        <div style="display:flex;align-items:center;gap:0.6rem;padding:0.5rem 0;border-bottom:1px solid rgba(30,35,48,0.6);">
+          <span style="font-family:var(--mono);font-size:0.55rem;color:var(--muted);width:12px;text-align:center;">${i+1}</span>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:0.72rem;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text);">${nombre}</div>
+            <div style="height:2px;background:var(--border);border-radius:2px;margin-top:5px;">
+              <div style="height:2px;width:${bar}%;background:${color};border-radius:2px;"></div>
+            </div>
+          </div>
+          <span style="font-family:var(--mono);font-size:0.9rem;font-weight:700;color:${color};white-space:nowrap;">${fmt(tna,1)}%</span>
+        </div>`;
+    }).join('');
+
+    const label = tnaNoClienteKey ? 'No Clientes · TNA' : 'TNA';
     el.innerHTML = `
-      <div class="metric-label">Plazo Fijo ${entidad ? '· ' + entidad : ''}</div>
-      <div class="pf-rate">${tna != null ? fmt(tna,1) + '%' : '—'} <span style="font-size:1rem;color:var(--muted)">TNA</span></div>
-      ${tea != null ? `<div class="metric-sub">TEA: ${fmt(tea,1)}%</div>` : ''}
-      <div class="metric-sub" style="margin-top:0.5rem;">${fecha ? '📅 ' + fecha : ''}</div>
-      <span class="badge badge-up" style="margin-top:0.5rem;">Últimas tasas</span>
+      <div class="metric-label">🏆 Top 5 Plazo Fijo · ${label}</div>
+      <div style="margin-top:0.4rem;">${rows}</div>
+      <div class="metric-sub" style="margin-top:0.6rem;font-size:0.58rem;">${lastFecha ? '📅 ' + lastFecha : ''} · ${latest.length} entidades</div>
     `;
   } catch(e) {
-    el.innerHTML = `<div class="metric-label">Plazo Fijo</div><div class="error-msg">Sin datos disponibles</div>`;
+    console.error('PF error:', e);
+    el.innerHTML = '<div class="metric-label">Plazo Fijo</div><div class="error-msg">Sin datos disponibles<br><span style="font-size:0.6rem;opacity:0.5;">' + e.message + '</span></div>';
   }
 }
 
